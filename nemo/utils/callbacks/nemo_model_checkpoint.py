@@ -33,7 +33,7 @@ from nemo.utils.model_utils import ckpt_to_dir, inject_model_parallel_rank, unin
 
 class NeMoModelCheckpoint(ModelCheckpoint):
     """ Light wrapper around Lightning's ModelCheckpoint to force a saved checkpoint on train_end.
-    Extends Lightning's on_save_checkpoint func to save the .nemo file. Saves the .nemo file based 
+    Extends Lightning's on_save_checkpoint func to save the .nemo file. Saves the .nemo file based
     on the best checkpoint saved (according to the monitor value).
     Also contains func to save the EMA copy of the model.
     """
@@ -75,6 +75,7 @@ class NeMoModelCheckpoint(ModelCheckpoint):
         if self.save_top_k != -1 and n_resume:
             logging.debug("Checking previous runs")
             self.nemo_topk_check_previous_run()
+            self.previous_best_path = self.best_model_path
 
     def nemo_topk_check_previous_run(self):
         try:
@@ -151,6 +152,7 @@ class NeMoModelCheckpoint(ModelCheckpoint):
         app_state.model_restore_path = os.path.abspath(
             os.path.expanduser(os.path.join(self.dirpath, self.prefix + self.postfix))
         )
+
         if app_state.model_parallel_size is not None and app_state.model_parallel_size > 1:
             maybe_injected_best_model_path = inject_model_parallel_rank(self.best_model_path)
         else:
@@ -158,7 +160,7 @@ class NeMoModelCheckpoint(ModelCheckpoint):
 
         if self.save_best_model:
             if not os.path.exists(maybe_injected_best_model_path):
-                return
+                return output
 
             if self.best_model_path == self.previous_best_path:
                 logging.debug('Best model has not changed, skipping save.')
@@ -198,7 +200,9 @@ class NeMoModelCheckpoint(ModelCheckpoint):
                 monitor_candidates = self._monitor_candidates(trainer)
                 super()._save_last_checkpoint(trainer, monitor_candidates)
         # Call parent on_train_end() to save the -last checkpoint
-        super().on_train_end(trainer, pl_module)
+        output = super().on_train_end(trainer, pl_module)
+
+        logging.warning(f'------> Here we are {trainer.global_rank=}.')
 
         # Load the best model and then re-save it
         if self.save_best_model:
@@ -210,13 +214,20 @@ class NeMoModelCheckpoint(ModelCheckpoint):
                     "were found. Saving latest model instead."
                 )
             else:
-                if os.path.isdir(self.best_model_path.split('.ckpt')[0]):
-                    self.best_model_path = self.best_model_path.split('.ckpt')[0]
+                if not os.path.exists(self.best_model_path):
+                    logging.warning(f'Path {self.best_model_path} does not exist on RANK {trainer.global_rank=}. If using NFS check your mount parameters; include either "lookupcache=positive" or "aotime=0".')
+                    return output
+
+                if self.best_model_path == self.previous_best_path:
+                    logging.warning('Best model has not changed, skipping save.')
+                    return output
+
                 self.best_model_path = trainer.strategy.broadcast(self.best_model_path)
+                self.previous_best_path = self.best_model_path
                 trainer._checkpoint_connector.restore(self.best_model_path)
 
         if self.save_nemo_on_train_end:
-            pl_module.save_to(save_path=os.path.join(self.dirpath, self.prefix + self.postfix))
+            pl_module.save_to(save_path=os.path.expanduser(os.path.join(self.dirpath, self.prefix + self.postfix)))
 
     def _del_model_without_trainer(self, filepath: str) -> None:
 

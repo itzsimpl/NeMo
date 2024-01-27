@@ -53,6 +53,7 @@ class SaveRestoreConnector:
             save_path: Path to .nemo file where model instance should be saved
         """
 
+#        logging.warning(f">>> ------>  {os.getenv('SLURMD_NODENAME')}.{os.getenv('SLURM_PROCID')}[{os.getpid()}] Saving model to {save_path=} ...")
         if is_global_rank_zero():
             with tempfile.TemporaryDirectory() as tmpdir:
                 config_yaml = os.path.join(tmpdir, self.model_config_yaml)
@@ -66,7 +67,9 @@ class SaveRestoreConnector:
                     self._update_artifact_paths(model, path2yaml_file=config_yaml)
                 self._save_state_dict_to_disk(model.state_dict(), model_weights)
                 self._make_nemo_file_from_folder(filename=save_path, source_dir=tmpdir)
+#            logging.warning(f">>> ------>  {os.getenv('SLURMD_NODENAME')}.{os.getenv('SLURM_PROCID')}[{os.getpid()}] done ...")
         else:
+#            logging.warning(f">>> ------>  {os.getenv('SLURMD_NODENAME')}.{os.getenv('SLURM_PROCID')}[{os.getpid()}] skip ...")
             return
 
     def load_config_and_state_dict(
